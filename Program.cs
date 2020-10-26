@@ -243,6 +243,20 @@ namespace Test
                 File.WriteAllText(Path.Combine(rootDirectory.ToString(), LuaListFileName), FileContent);
             });
 
+            var FillDDCCommand = new Command("fill-ddc") {
+                new Argument<DirectoryInfo> (
+                "Project-Path",
+                "项目根目录"
+                )
+            };
+            rootCommand.Add(FillDDCCommand);
+            FillDDCCommand.Handler = CommandHandler.Create<DirectoryInfo>((ProjectPath) =>
+            {
+                string CmdExePath = GetEngineWin64Path(FindUproject(ProjectPath)).FullName + "\\UE4Editor-Cmd.exe";
+
+                Exec(CmdExePath, FindUproject(ProjectPath).FullName + " -run=DerivedDataCache -fill", null);
+            });
+
             var BatchCompileBlueprintsCommand = new Command("batch-compile-blueprints") {
                 new Argument<DirectoryInfo> (
                 "Project-Path",
