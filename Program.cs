@@ -168,12 +168,16 @@ namespace Test
                 "Path of Plugins"
                 ),
                 new Argument<DirectoryInfo> (
+                "Plugin-Path",
+                "Path of Plugins"
+                ),
+                new Argument<DirectoryInfo> (
                 "Output-Path",
                 "Path of builded output"
                 )
             };
             rootCommand.Add(BuildPluginCommand);
-            BuildPluginCommand.Handler = CommandHandler.Create<DirectoryInfo, DirectoryInfo>((rootPath, outputPath) =>
+            BuildPluginCommand.Handler = CommandHandler.Create<DirectoryInfo, DirectoryInfo, DirectoryInfo>((rootPath, pluginPath, outputPath) =>
             {
                 string EnginePath = null;
                 using (var Key = Registry.CurrentUser.OpenSubKey(RegistryPath, true))
@@ -190,7 +194,7 @@ namespace Test
                     return;
                 }
                 var UATPath = Path.Combine(EnginePath, "Engine/Build/BatchFiles/RunUAT.bat");
-                Directory.GetFiles(rootPath.ToString(), "*.uplugin", SearchOption.AllDirectories)
+                Directory.GetFiles(pluginPath.ToString(), "*.uplugin", SearchOption.AllDirectories)
                     .ToList().ForEach(x =>
                     {
                         var RelativePath = Path.GetRelativePath(rootPath.ToString(), Path.GetDirectoryName(x));
