@@ -57,20 +57,57 @@ namespace Test
                 "Server directory path"
                 ),
                 new Argument<DirectoryInfo> (
-                "Proj-Path",
-                "Project directory path"
+                "Engine-Path",
+                "Engine directory path"
                 )
             };
             rootCommand.Add(CopyEngineCommand);
-            CopyEngineCommand.Handler = CommandHandler.Create<bool, bool, DirectoryInfo, DirectoryInfo>((upload, checksum, serverPath, projPath) =>
+            CopyEngineCommand.Handler = CommandHandler.Create<bool, bool, DirectoryInfo, DirectoryInfo>((upload, checksum, serverPath, enginePath) =>
             {
                 var operationName = "engine";
                 if (checksum)
                 {
-                    var csm = GenerateDatabase(operationName, projPath, "*", null);
-                    File.WriteAllText(Path.Combine(projPath.ToString(), $"{operationName}-{checkSumFileName}"), JsonConvert.SerializeObject(csm, Formatting.Indented));
+                    var mainbar = new ProgressBar(0, "Processing", options);
+                    var filePath = Path.Combine(enginePath.ToString(), $"{operationName}-{checkSumFileName}");
+                    Dictionary<string, FileIndentifier> prevCsm = TryReadDatabase(filePath);
+                    var csm = GenerateDatabase(operationName, enginePath, "*", mainbar, null, prevCsm);
+                    mainbar.Dispose();
+                    File.WriteAllText(Path.Combine(enginePath.ToString(), $"{operationName}-{checkSumFileName}"), JsonConvert.SerializeObject(csm, Formatting.Indented));
                     return;
                 }
+
+                if (upload)
+                    UploadFile(operationName, enginePath, serverPath, "*", null);
+                else
+                {
+                    var Editor = System.Diagnostics.Process.GetProcessesByName("UE4Editor");
+                    if (Editor.Length > 0)
+                    {
+                        Console.WriteLine("Editor is still running, abort!");
+                        return;
+                    }
+                    DownloadFile(operationName, serverPath, enginePath);
+                    SetRegistry(enginePath.ToString());
+                }
+
+            });
+
+            var UpdateEngineCommand = new Command("update-project-engine")
+            {
+                new Argument<DirectoryInfo> (
+                "Server-Path",
+                "Server directory path"
+                ),
+                new Argument<DirectoryInfo> (
+                "Proj-Path",
+                "Project directory path"
+                ),
+            };
+            rootCommand.Add(UpdateEngineCommand);
+            UpdateEngineCommand.Handler = CommandHandler.Create<DirectoryInfo, DirectoryInfo>((serverPath, projPath) =>
+            {
+                FileInfo Uproject = FindUproject(projPath);
+                var enginePath = GetEnginePath(Uproject);
 
                 var Editor = System.Diagnostics.Process.GetProcessesByName("UE4Editor");
                 if (Editor.Length > 0)
@@ -79,14 +116,8 @@ namespace Test
                     return;
                 }
 
-                if (upload)
-                    UploadFile(operationName, projPath, serverPath, "*", null);
-                else
-                {
-                    DownloadFile(operationName, serverPath, projPath);
-                    SetRegistry(projPath.ToString());
-                }
-
+                DownloadFile("engine", serverPath, enginePath);
+                DownloadFile("plugin", new DirectoryInfo(Path.Combine(serverPath.ToString(), "Engine/Plugins")), new DirectoryInfo(Path.Combine(enginePath.ToString(), "Engine/Plugins")));
             });
 
             var CopyPluginCommand = new Command("update-plugin") {
@@ -164,7 +195,7 @@ namespace Test
 
             var BuildPluginCommand = new Command("build-plugin") {
                 new Argument<DirectoryInfo> (
-                "Root-Path",
+                "Project-Path",
                 "Path of Plugins"
                 ),
                 new Argument<DirectoryInfo> (
@@ -174,37 +205,35 @@ namespace Test
                 new Argument<DirectoryInfo> (
                 "Output-Path",
                 "Path of builded output"
+                ),
+                new Option<string[]>(
+                "--plugins",
+                "Name of plugin to build"
                 )
             };
             rootCommand.Add(BuildPluginCommand);
-            BuildPluginCommand.Handler = CommandHandler.Create<DirectoryInfo, DirectoryInfo, DirectoryInfo>((rootPath, pluginPath, outputPath) =>
+            BuildPluginCommand.Handler = CommandHandler.Create<DirectoryInfo, DirectoryInfo, DirectoryInfo, IEnumerable<string>>((ProjectPath, pluginPath, outputPath, plugins) =>
             {
-                string EnginePath = null;
-                using (var Key = Registry.CurrentUser.OpenSubKey(RegistryPath, true))
-                {
-                    if (Key != null)
-                    {
-                        if (Key.GetValueKind("RealEngine") == RegistryValueKind.String)
-                            EnginePath = (string)Key.GetValue("RealEngine");
-                    }
-                }
+                string EnginePath = GetEnginePath(FindUproject(ProjectPath)).FullName;
                 if (EnginePath == null)
                 {
                     Console.WriteLine("Engine not found, abort!");
                     return;
                 }
                 var UATPath = Path.Combine(EnginePath, "Engine/Build/BatchFiles/RunUAT.bat");
+                bool appendLog = false;;
                 Directory.GetFiles(pluginPath.ToString(), "*.uplugin", SearchOption.AllDirectories)
                     .ToList().ForEach(x =>
                     {
-                        var RelativePath = Path.GetRelativePath(rootPath.ToString(), Path.GetDirectoryName(x));
+                        if(plugins != null && !plugins.Contains(Path.GetFileNameWithoutExtension(x)))
+                            return;
+                        var RelativePath = Path.GetRelativePath(pluginPath.ToString(), Path.GetDirectoryName(x));
                         var BuildPath = Path.Combine(outputPath.ToString(), RelativePath);
                         Directory.CreateDirectory(BuildPath);
-                        var CommandLine = $"BuildPlugin -VS2019 -Plugin=\"{x}\" -Package=\"{BuildPath}\" -CreateSubFolder";
-                        var FullCommandLine = $"/c \"\"{UATPath}\" {CommandLine}\"";
-                        Console.WriteLine($"Building plugin: {FullCommandLine}");
-                        var Process = System.Diagnostics.Process.Start("cmd", FullCommandLine);
-                        Process.WaitForExit();
+                        var CommandLine = $"BuildPlugin -VS2019 -Plugin=\"{x}\" -Package=\"{BuildPath}\" -CreateSubFolder -TargetPlatforms=Win64";
+                        
+                        Exec(UATPath, CommandLine, new FileInfo(Path.Combine(pluginPath.ToString(), "Logs", "Build.log")), appendLog);
+                        appendLog = true;
                         Console.WriteLine("\n");
                     });
             });
@@ -315,33 +344,32 @@ namespace Test
                 string Arguments;
 
                 Console.WriteLine("打包游戏\n");
-                Arguments = String.Format("{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17}",
-                    "-ScriptsForProject=" + Uproject.FullName,
-                    "BuildCookRun",
-                    "-installed",
-                    "-nop4",
-                    "-project=" + Uproject.FullName,
-                    "-cook",
-                    "-stage",
-                    "-archive -archivedirectory=" + Out.FullName,
-                    "-package",
-                    "-ue4exe=" + CmdExePath,
-                    "-compressed",
-                    "-pak",
-                    "-prereqs",
-                    "-targetplatform=" + TargetPlatform.ToString(),
-                    "-build",
-                    "-target=" + ProjectName,
-                    "-clientconfig=" + TargetBuild.ToString(),
-                    "-utf8output"
-                );
+                Arguments = $@"
+                -ScriptsForProject={Uproject.FullName} 
+                BuildCookRun 
+                -installed 
+                -nop4 
+                -project={Uproject.FullName} 
+                -cook 
+                -stage 
+                -archive -archivedirectory={Out.FullName} 
+                -package 
+                -ue4exe={CmdExePath} 
+                -compressed 
+                -pak 
+                -prereqs 
+                -targetplatform={TargetPlatform.ToString()} 
+                -build 
+                -target={ProjectName} 
+                -clientconfig={TargetBuild.ToString()} 
+                -utf8output";
                 Exec(UATPath, Arguments, new FileInfo(Path.Join(Out.FullName, "PackagingGame.log")));
             });
 
             rootCommand.InvokeAsync(args);
         }
 
-        static void Exec(string exePath, string parameters, FileInfo? OutLog)
+        static void Exec(string exePath, string parameters, FileInfo OutLog = null, bool appendLog = false)
         {
             Console.WriteLine("启动 "+ exePath + " " + parameters);
             ProcessStartInfo psi =
@@ -353,11 +381,11 @@ namespace Test
             psi.FileName = exePath;
             psi.Arguments = parameters;
 
-            StreamWriter? file = null;
+            StreamWriter file = null;
             if (OutLog != null)
             {
                 if (!OutLog.Directory.Exists) OutLog.Directory.Create();
-                file = new StreamWriter(OutLog.FullName, false);
+                file = new StreamWriter(OutLog.FullName, appendLog);
             }
 
             using (var process = new System.Diagnostics.Process())
@@ -492,9 +520,11 @@ namespace Test
 
         static void DownloadFile(string OperationName, DirectoryInfo srcPath, DirectoryInfo dstPath)
         {
+            var srcFilePath = Path.Combine(srcPath.ToString(), $"{OperationName}-{checkSumFileName}");
+            var dstFilePath = Path.Combine(dstPath.ToString(), $"{OperationName}-{checkSumFileName}");
             dstPath.Create();
-            Dictionary<string, FileIndentifier> srcScm = TryReadDatabase(OperationName, srcPath);
-            Dictionary<string, FileIndentifier> dstScm = TryReadDatabase(OperationName, dstPath);
+            Dictionary<string, FileIndentifier> srcScm = TryReadDatabase(srcFilePath);
+            Dictionary<string, FileIndentifier> dstScm = TryReadDatabase(dstFilePath);
 
             var mainbar = new ProgressBar(3, "Fetching", options);
             if (dstScm == null)
@@ -542,6 +572,7 @@ namespace Test
                 pbar.Dispose();
                 mainbar.Tick("Validating");
                 pbar = mainbar.Spawn(dstScm.Count, "Processing", childOptions);
+                var UpdatedInfo = new List<(string, FileIndentifier)>();
                 foreach (var pair in dstScm)
                 {
                     pbar.Tick($"Processing {pair.Key}");
@@ -564,7 +595,11 @@ namespace Test
                     Directory.CreateDirectory(Path.GetDirectoryName(dp.ToString()));
                     File.Copy(sp, dp.ToString(), true);
                     File.SetLastWriteTimeUtc(dp.ToString(), DateTime.FromBinary(value.LastWriteTime));
+                    UpdatedInfo.Add((pair.Key, value));
                 }
+                foreach(var (key, value) in UpdatedInfo)
+                    dstScm[key] = value;
+
                 pbar.Dispose();
                 mainbar.Tick("Finished");
                 mainbar.Dispose();
@@ -609,21 +644,17 @@ namespace Test
             });
         }
 
-        static Dictionary<string, FileIndentifier> GenerateDatabase(string operationName, DirectoryInfo path, string filter, Func<string, bool> predicate = null, Dictionary<string, FileIndentifier> reference = null, ProgressBar parentbar = null)
+        static Dictionary<string, FileIndentifier> GenerateDatabase(string operationName, DirectoryInfo path, string filter, ProgressBarBase pbar, Func<string, bool> predicate = null, Dictionary<string, FileIndentifier> reference = null)
         {
             Dictionary<string, FileIndentifier> csm = new Dictionary<string, FileIndentifier>();
             var csmFilePath = Path.Combine(path.ToString(), $"{operationName}-{checkSumFileName}");
             predicate = predicate ?? (x => true);
             var options = new ProgressBarOptions { };
             var FileList = Directory.GetFiles(path.ToString(), filter, SearchOption.AllDirectories).Where(predicate).ToList();
-            ProgressBarBase pbar;
-            if (parentbar == null)
-                pbar = new ProgressBar(FileList.Count, "Processing", options);
-            else
-                pbar = parentbar.Spawn(FileList.Count, "Processing", childOptions);
+            pbar.MaxTicks = FileList.Count;
             FileList.ForEach(x =>
             {
-                if (x.Contains(".csm"))
+                if (x.Contains("-csm") || x.Contains(".aborted"))
                     return;
                 var RelativePath = Path.GetRelativePath(path.ToString(), x);
                 pbar.Tick($"Processing {RelativePath}");
@@ -644,9 +675,8 @@ namespace Test
             return csm;
         }
 
-        static Dictionary<string, FileIndentifier> TryReadDatabase(string operationName, DirectoryInfo rootPath)
+        static Dictionary<string, FileIndentifier> TryReadDatabase(string csmFilePath)
         {
-            var csmFilePath = Path.Combine(rootPath.ToString(), $"{operationName}-{checkSumFileName}");
             Dictionary<string, FileIndentifier> csm = null;
             if (File.Exists(csmFilePath))
             {
@@ -667,12 +697,30 @@ namespace Test
         {
             var srcCsmFilePath = Path.Combine(srcPath.ToString(), $"{operationName}-{checkSumFileName}");
             var dstCsmFilePath = Path.Combine(dstPath.ToString(), $"{operationName}-{checkSumFileName}");
+            var abn = Path.Combine(srcPath.ToString(), ".aborted", dstCsmFilePath.ToString().Replace("\\", "-").Replace("/", "-"));
 
             var mainbar = new ProgressBar(4, "Fetching", options);
-            Dictionary<string, FileIndentifier> dstCsm = TryReadDatabase(operationName, dstPath);
+            Dictionary<string, FileIndentifier> dstCsm = null;
             mainbar.Tick("Analysing");
-            Dictionary<string, FileIndentifier> srcCsm = TryReadDatabase(operationName, srcPath);
-            srcCsm = GenerateDatabase(operationName, srcPath, filter, predicate, srcCsm, mainbar);
+            Dictionary<string, FileIndentifier> srcCsm = TryReadDatabase(srcCsmFilePath);
+            if(File.Exists(abn) && File.Exists(dstCsmFilePath))
+            {
+                if(File.GetLastWriteTimeUtc(abn) > File.GetLastWriteTimeUtc(dstCsmFilePath))
+                    dstCsm = TryReadDatabase(abn);
+                if(dstCsm == null)
+                    dstCsm = TryReadDatabase(dstCsmFilePath);
+            }
+            if(dstCsm == null)
+                dstCsm = TryReadDatabase(abn);
+            if(dstCsm == null)
+                dstCsm = TryReadDatabase(dstCsmFilePath);
+                
+            {
+                var pbar = mainbar.Spawn(0, "Processing", childOptions);
+                srcCsm = GenerateDatabase(operationName, srcPath, filter, pbar, predicate, srcCsm);
+                pbar.Dispose();
+            }
+            
 
             if (dstCsm == null)
                 dstCsm = new Dictionary<string, FileIndentifier>();
@@ -718,11 +766,20 @@ namespace Test
                 mainbar.Tick("Finished");
                 mainbar.Dispose();
             }
+            catch(Exception)
+            {
+                //Console.WriteLine(e.ToString());
+                Directory.CreateDirectory(Path.GetDirectoryName(abn));
+                File.WriteAllText(abn, JsonConvert.SerializeObject(dstCsm, Formatting.Indented));
+                throw;
+            }
             finally
             {
                 File.WriteAllText(srcCsmFilePath, JsonConvert.SerializeObject(srcCsm, Formatting.Indented));
-                File.Copy(srcCsmFilePath, dstCsmFilePath, true);
             }
+            File.Copy(srcCsmFilePath, dstCsmFilePath, true);
+            if(File.Exists(abn))
+                File.Delete(abn);
         }
     }
 }
