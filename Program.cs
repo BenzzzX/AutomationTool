@@ -371,25 +371,26 @@ namespace Test
                 string Arguments;
 
                 Console.WriteLine("打包游戏\n");
-                Arguments = $@"
-                -ScriptsForProject={Uproject.FullName} 
-                BuildCookRun 
-                -installed 
-                -nop4 
-                -project={Uproject.FullName} 
-                -cook 
-                -stage 
-                -archive -archivedirectory={Out.FullName} 
-                -package 
-                -ue4exe={CmdExePath} 
-                -compressed 
-                -pak 
-                -prereqs 
-                -targetplatform={TargetPlatform.ToString()} 
-                -build 
-                -target={ProjectName} 
-                -clientconfig={TargetBuild.ToString()} 
-                -utf8output";
+                Arguments = String.Format("{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17}",
+                    "-ScriptsForProject=" + Uproject.FullName,
+                    "BuildCookRun",
+                    "-installed",
+                    "-nop4",
+                    "-project=" + Uproject.FullName,
+                    "-cook",
+                    "-stage",
+                    "-archive -archivedirectory=" + Out.FullName,
+                    "-package",
+                    "-ue4exe=" + CmdExePath,
+                    "-compressed",
+                    "-pak",
+                    "-prereqs",
+                    "-targetplatform=" + TargetPlatform.ToString(),
+                    "-build",
+                    "-target=" + ProjectName,
+                    "-clientconfig=" + TargetBuild.ToString(),
+                    "-utf8output"
+                );
                 Exec(UATPath, Arguments, new FileInfo(Path.Join(Out.FullName, "PackagingGame.log")));
             });
 
