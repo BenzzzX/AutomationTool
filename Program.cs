@@ -49,8 +49,8 @@ namespace Test
                 "Upload file to server instead of download"
                 ),
                 new Option<bool> (
-                new string[] { "--checksum", "-c" },
-                "Only calculate checksum"
+                new string[] { "--check", "-c" },
+                "Check file before upload or download"
                 ),
                 new Argument<DirectoryInfo> (
                 "Server-Path",
@@ -62,22 +62,22 @@ namespace Test
                 )
             };
             rootCommand.Add(CopyEngineCommand);
-            CopyEngineCommand.Handler = CommandHandler.Create<bool, bool, DirectoryInfo, DirectoryInfo>((upload, checksum, serverPath, enginePath) =>
+            CopyEngineCommand.Handler = CommandHandler.Create<bool, bool, DirectoryInfo, DirectoryInfo>((upload, check, serverPath, enginePath) =>
             {
                 var operationName = "engine";
-                if (checksum)
-                {
-                    var mainbar = new ProgressBar(0, "Processing", options);
-                    var filePath = Path.Combine(enginePath.ToString(), $"{operationName}-{checkSumFileName}");
-                    Dictionary<string, FileIndentifier> prevCsm = TryReadDatabase(filePath);
-                    var csm = GenerateDatabase(operationName, enginePath, "*", mainbar, null, prevCsm);
-                    mainbar.Dispose();
-                    File.WriteAllText(Path.Combine(enginePath.ToString(), $"{operationName}-{checkSumFileName}"), JsonConvert.SerializeObject(csm, Formatting.Indented));
-                    return;
-                }
+                // if (checksum)
+                // {
+                //     var mainbar = new ProgressBar(0, "Processing", options);
+                //     var filePath = Path.Combine(enginePath.ToString(), $"{operationName}-{checkSumFileName}");
+                //     Dictionary<string, FileIndentifier> prevCsm = TryReadDatabase(filePath);
+                //     var csm = GenerateDatabase(operationName, enginePath, "*", mainbar, null, prevCsm);
+                //     mainbar.Dispose();
+                //     File.WriteAllText(Path.Combine(enginePath.ToString(), $"{operationName}-{checkSumFileName}"), JsonConvert.SerializeObject(csm, Formatting.Indented));
+                //     return;
+                // }
 
                 if (upload)
-                    UploadFile(operationName, enginePath, serverPath, "*", null);
+                    UploadFile(operationName, enginePath, serverPath, "*", null, check);
                 else
                 {
                     var Editor = System.Diagnostics.Process.GetProcessesByName("UE4Editor");
@@ -102,9 +102,13 @@ namespace Test
                 "Proj-Path",
                 "Project directory path"
                 ),
+                new Option<bool> (
+                "--no-plugin",
+                "Whether to not update installed plugin"
+                )
             };
             rootCommand.Add(UpdateEngineCommand);
-            UpdateEngineCommand.Handler = CommandHandler.Create<DirectoryInfo, DirectoryInfo>((serverPath, projPath) =>
+            UpdateEngineCommand.Handler = CommandHandler.Create<DirectoryInfo, DirectoryInfo, bool>((serverPath, projPath, noPlugin) =>
             {
                 FileInfo Uproject = FindUproject(projPath);
                 var enginePath = GetEnginePath(Uproject);
@@ -117,13 +121,18 @@ namespace Test
                 }
 
                 DownloadFile("engine", serverPath, enginePath);
-                DownloadFile("plugin", new DirectoryInfo(Path.Combine(serverPath.ToString(), "Engine/Plugins")), new DirectoryInfo(Path.Combine(enginePath.ToString(), "Engine/Plugins")));
+                if(!noPlugin)
+                    DownloadFile("plugin", new DirectoryInfo(Path.Combine(serverPath.ToString(), "Engine/Plugins")), new DirectoryInfo(Path.Combine(enginePath.ToString(), "Engine/Plugins")));
             });
 
             var CopyPluginCommand = new Command("update-plugin") {
                 new Option<bool> (
                 new string[] { "--upload", "-u" },
                 "Upload file to server instead of download"
+                ),
+                new Option<bool> (
+                new string[] { "--check", "-c" },
+                "Check file before upload or download"
                 ),
                 new Argument<DirectoryInfo> (
                 "Server-Path",
@@ -135,27 +144,32 @@ namespace Test
                 )
             };
             rootCommand.Add(CopyPluginCommand);
-            CopyPluginCommand.Handler = CommandHandler.Create<bool, DirectoryInfo, DirectoryInfo>((upload, serverPath, projPath) =>
+            CopyPluginCommand.Handler = CommandHandler.Create<bool, bool, DirectoryInfo, DirectoryInfo>((upload, check, serverPath, projPath) =>
             {
                 var operationName = "plugin";
 
-                var Editor = System.Diagnostics.Process.GetProcessesByName("UE4Editor");
-                if (Editor.Length > 0)
-                {
-                    Console.WriteLine("Editor is still running, abort!");
-                    return;
-                }
-
                 if (upload)
-                    UploadFile(operationName, projPath, serverPath, "*", null);
+                    UploadFile(operationName, projPath, serverPath, "*", null, check);
                 else
+                {
+                    var Editor = System.Diagnostics.Process.GetProcessesByName("UE4Editor");
+                    if (Editor.Length > 0)
+                    {
+                        Console.WriteLine("Editor is still running, abort!");
+                        return;
+                    }
                     DownloadFile(operationName, serverPath, projPath);
+                }
             });
 
             var CopyPBDCommand = new Command("update-pdb") {
                 new Option<bool> (
                 new string[] { "--upload", "-u" },
                 "Upload file to server instead of download"
+                ),
+                new Option<bool> (
+                new string[] { "--check", "-c" },
+                "Check file before upload or download"
                 ),
                 new Argument<DirectoryInfo> (
                 "Server-Path",
@@ -167,13 +181,13 @@ namespace Test
                 )
             };
             rootCommand.Add(CopyPBDCommand);
-            CopyPBDCommand.Handler = CommandHandler.Create<bool, DirectoryInfo, DirectoryInfo>((upload, serverPath, projPath) =>
+            CopyPBDCommand.Handler = CommandHandler.Create<bool, bool, DirectoryInfo, DirectoryInfo>((upload, check, serverPath, projPath) =>
             {
                 var operationName = "pdb";
                 Console.WriteLine($"Copying pdb from {serverPath} to {projPath}");
                 string pattern = @".*-\d\d\d\d\.pdb";
                 if (upload)
-                    UploadFile(operationName, projPath, serverPath, "*.pdb", x => !x.Contains("DebugGame") && !Regex.IsMatch(x, pattern) && x.Contains("Binaries"));
+                    UploadFile(operationName, projPath, serverPath, "*.pdb", x => !x.Contains("DebugGame") && !Regex.IsMatch(x, pattern) && x.Contains("Binaries"), check);
                 else
                 {
                     DownloadFile(operationName, serverPath, projPath);
@@ -209,12 +223,25 @@ namespace Test
                 new Option<string[]>(
                 "--plugins",
                 "Name of plugin to build"
+                ),
+                new Option<string>(
+                "--engine",
+                "Name of engine to use"
                 )
             };
             rootCommand.Add(BuildPluginCommand);
-            BuildPluginCommand.Handler = CommandHandler.Create<DirectoryInfo, DirectoryInfo, DirectoryInfo, IEnumerable<string>>((ProjectPath, pluginPath, outputPath, plugins) =>
+            BuildPluginCommand.Handler = CommandHandler.Create<DirectoryInfo, DirectoryInfo, DirectoryInfo, IEnumerable<string>, string>((ProjectPath, pluginPath, outputPath, plugins, engine) =>
             {
-                string EnginePath = GetEnginePath(FindUproject(ProjectPath)).FullName;
+                string EnginePath = null;
+                if(engine != null)
+                {
+                    EnginePath = ReadEnginePathRegistry(engine).FullName;
+                }
+                else
+                {
+                    EnginePath = GetEnginePath(FindUproject(ProjectPath)).FullName;
+                }
+                 
                 if (EnginePath == null)
                 {
                     Console.WriteLine("Engine not found, abort!");
@@ -283,7 +310,7 @@ namespace Test
             {
                 string CmdExePath = GetEngineWin64Path(FindUproject(ProjectPath)).FullName + "\\UE4Editor-Cmd.exe";
 
-                Exec(CmdExePath, FindUproject(ProjectPath).FullName + " -run=DerivedDataCache -fill", null);
+                Exec(CmdExePath, FindUproject(ProjectPath).FullName + " -run=DerivedDataCache -fill -MAPSONLY", null);
             });
 
             var BatchCompileBlueprintsCommand = new Command("batch-compile-blueprints") {
@@ -424,6 +451,29 @@ namespace Test
             throw new System.ArgumentException("找不到 *.uproject");
         }
 
+        static DirectoryInfo ReadEnginePathRegistry(string EngineAssociation)
+        {
+            string EnginePath = "";
+            using (var Key = Registry.CurrentUser.OpenSubKey(RegistryPath, true))
+            {
+                if (Key != null)
+                {
+                    if (Key.GetValueNames().Contains(EngineAssociation) && Key.GetValueKind(EngineAssociation) == RegistryValueKind.String)
+                        EnginePath = (string)Key.GetValue(EngineAssociation);
+                }
+            }
+            using (var Key = Registry.LocalMachine.OpenSubKey(RegistryPath2 + "\\" + EngineAssociation, true))
+            {
+                if (Key != null)
+                {
+                    if (Key.GetValueKind("InstalledDirectory") == RegistryValueKind.String)
+                        EnginePath = (string)Key.GetValue("InstalledDirectory");
+                }
+            }
+            if (EnginePath == "") throw new System.ArgumentException("找不到引擎路径");
+            return new DirectoryInfo(EnginePath);
+        }
+
         static DirectoryInfo GetEnginePath(FileInfo ProjectPath)
         {
             using (System.IO.StreamReader file = System.IO.File.OpenText(ProjectPath.FullName))
@@ -433,25 +483,7 @@ namespace Test
                     JObject o = (JObject)JToken.ReadFrom(reader);
                     var EngineAssociation = o["EngineAssociation"].ToString();
 
-                    string EnginePath = "";
-                    using (var Key = Registry.CurrentUser.OpenSubKey(RegistryPath, true))
-                    {
-                        if (Key != null)
-                        {
-                            if (Key.GetValueNames().Contains(EngineAssociation) && Key.GetValueKind(EngineAssociation) == RegistryValueKind.String)
-                                EnginePath = (string)Key.GetValue(EngineAssociation);
-                        }
-                    }
-                    using (var Key = Registry.LocalMachine.OpenSubKey(RegistryPath2 + "\\" + EngineAssociation, true))
-                    {
-                        if (Key != null)
-                        {
-                            if (Key.GetValueKind("InstalledDirectory") == RegistryValueKind.String)
-                                EnginePath = (string)Key.GetValue("InstalledDirectory");
-                        }
-                    }
-                    if (EnginePath == "") throw new System.ArgumentException("找不到引擎路径");
-                    return new DirectoryInfo(EnginePath);
+                    return ReadEnginePathRegistry(EngineAssociation);
                 }
             }
             throw new System.ArgumentException("找不到引擎版本信息");
@@ -693,13 +725,13 @@ namespace Test
             return csm;
         }
 
-        static void UploadFile(string operationName, DirectoryInfo srcPath, DirectoryInfo dstPath, string filter, Func<string, bool> predicate)
+        static void UploadFile(string operationName, DirectoryInfo srcPath, DirectoryInfo dstPath, string filter, Func<string, bool> predicate, bool performCheck)
         {
             var srcCsmFilePath = Path.Combine(srcPath.ToString(), $"{operationName}-{checkSumFileName}");
             var dstCsmFilePath = Path.Combine(dstPath.ToString(), $"{operationName}-{checkSumFileName}");
             var abn = Path.Combine(srcPath.ToString(), ".aborted", dstCsmFilePath.ToString().Replace("\\", "-").Replace("/", "-"));
 
-            var mainbar = new ProgressBar(4, "Fetching", options);
+            var mainbar = new ProgressBar(performCheck ? 4 : 5, "Fetching", options);
             Dictionary<string, FileIndentifier> dstCsm = null;
             mainbar.Tick("Analysing");
             Dictionary<string, FileIndentifier> srcCsm = TryReadDatabase(srcCsmFilePath);
@@ -718,6 +750,15 @@ namespace Test
             {
                 var pbar = mainbar.Spawn(0, "Processing", childOptions);
                 srcCsm = GenerateDatabase(operationName, srcPath, filter, pbar, predicate, srcCsm);
+                pbar.Dispose();
+            }
+
+            if(performCheck)
+            {
+                mainbar.Tick("Checking");
+                var pbar = mainbar.Spawn(0, "Checking", childOptions);
+                dstCsm = GenerateDatabase(operationName, dstPath, filter, pbar, predicate, dstCsm);
+                File.WriteAllText(dstCsmFilePath, JsonConvert.SerializeObject(dstCsm, Formatting.Indented));
                 pbar.Dispose();
             }
             
