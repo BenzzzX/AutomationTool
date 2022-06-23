@@ -42,6 +42,17 @@ namespace Test
 
         static void Main(string[] args)
         {
+            Debug.WriteLine(string.Join(", ", args));
+            if(args.Count() > 0 && string.Compare(args[0], "-run-project", true) == 0)
+            {
+                var ProjectPath = new DirectoryInfo(args[1]);
+                string CmdExePath = GetEngineWin64Path(FindUproject(ProjectPath)).FullName + "\\UnrealEditor-Cmd.exe";
+                List<string> CommandTokens = new List<string>();
+                CommandTokens.Add(FindUproject(ProjectPath).FullName);
+                CommandTokens.AddRange(args.Skip(2));
+                Exec(CmdExePath, string.Join(" ", CommandTokens), null);
+                return;
+            }
             var rootCommand = new RootCommand("Seven Days Tool Set");
             var CopyEngineCommand = new Command("update-engine") {
                 new Option<bool> (
@@ -80,7 +91,7 @@ namespace Test
                     UploadFile(operationName, enginePath, serverPath, "*", null, check);
                 else
                 {
-                    var Editor = System.Diagnostics.Process.GetProcessesByName("UE4Editor");
+                    var Editor = System.Diagnostics.Process.GetProcessesByName("UnrealEditor");
                     if (Editor.Length > 0)
                     {
                         Console.WriteLine("Editor is still running, abort!");
@@ -113,7 +124,7 @@ namespace Test
                 FileInfo Uproject = FindUproject(projPath);
                 var enginePath = GetEnginePath(Uproject);
 
-                var Editor = System.Diagnostics.Process.GetProcessesByName("UE4Editor");
+                var Editor = System.Diagnostics.Process.GetProcessesByName("UnrealEditor");
                 if (Editor.Length > 0)
                 {
                     Console.WriteLine("Editor is still running, abort!");
@@ -152,7 +163,7 @@ namespace Test
                     UploadFile(operationName, projPath, serverPath, "*", null, check);
                 else
                 {
-                    var Editor = System.Diagnostics.Process.GetProcessesByName("UE4Editor");
+                    var Editor = System.Diagnostics.Process.GetProcessesByName("UnrealEditor");
                     if (Editor.Length > 0)
                     {
                         Console.WriteLine("Editor is still running, abort!");
@@ -308,7 +319,7 @@ namespace Test
             rootCommand.Add(FillDDCCommand);
             FillDDCCommand.Handler = CommandHandler.Create<DirectoryInfo>((ProjectPath) =>
             {
-                string CmdExePath = GetEngineWin64Path(FindUproject(ProjectPath)).FullName + "\\UE4Editor-Cmd.exe";
+                string CmdExePath = GetEngineWin64Path(FindUproject(ProjectPath)).FullName + "\\UnrealEditor-Cmd.exe";
 
                 Exec(CmdExePath, FindUproject(ProjectPath).FullName + " -run=DerivedDataCache -fill -MAPSONLY", null);
             });
@@ -322,24 +333,11 @@ namespace Test
             rootCommand.Add(BatchCompileBlueprintsCommand);
             BatchCompileBlueprintsCommand.Handler = CommandHandler.Create<DirectoryInfo>((ProjectPath) =>
             {
-                string CmdExePath = GetEngineWin64Path(FindUproject(ProjectPath)).FullName + "\\UE4Editor-Cmd.exe";
+                string CmdExePath = GetEngineWin64Path(FindUproject(ProjectPath)).FullName + "\\UnrealEditor-Cmd.exe";
 
                 Exec(CmdExePath, FindUproject(ProjectPath).FullName + " -run=CompileAllBlueprints -utf8output", null);
             });
 
-            var BatchBuildMapCommand = new Command("batch-build-map") {
-                new Argument<DirectoryInfo> (
-                "Project-Path",
-                "项目根目录"
-                )
-            };
-            rootCommand.Add(BatchBuildMapCommand);
-            BatchBuildMapCommand.Handler = CommandHandler.Create<DirectoryInfo>((ProjectPath) =>
-            {
-                string CmdExePath = GetEngineWin64Path(FindUproject(ProjectPath)).FullName + "\\UE4Editor-Cmd.exe";
-
-                Exec(CmdExePath, FindUproject(ProjectPath).FullName + " -run=BatchBuildMapCommandlet -AllowCommandletRendering -utf8output", null);
-            });
 
             var BuildGameCommand = new Command("build-game") {
                 new Argument<DirectoryInfo> (
@@ -364,7 +362,7 @@ namespace Test
             {
                 FileInfo Uproject = FindUproject(ProjectPath);
                 string ProjectName = Path.GetFileNameWithoutExtension(Uproject.ToString());
-                string CmdExePath = "\"" + GetEngineWin64Path(FindUproject(ProjectPath)).FullName + "\\UE4Editor-Cmd.exe" + "\"";
+                string CmdExePath = "\"" + GetEngineWin64Path(FindUproject(ProjectPath)).FullName + "\\UnrealEditor-Cmd.exe" + "\"";
                 string UnrealBuildToolPath = GetEngineWin64Path(Uproject).FullName + "\\UnrealBuildTool.exe";
                 string UATPath = GetEngineBatchFilesPath(Uproject).FullName + "\\RunUAT.bat";
 
@@ -381,7 +379,7 @@ namespace Test
                     "-stage",
                     "-archive -archivedirectory=" + Out.FullName,
                     "-package",
-                    "-ue4exe=" + CmdExePath,
+                    "-ueexe=" + CmdExePath,
                     "-compressed",
                     "-pak",
                     "-prereqs",
@@ -819,7 +817,7 @@ namespace Test
             {
                 File.WriteAllText(srcCsmFilePath, JsonConvert.SerializeObject(srcCsm, Formatting.Indented));
             }
-            File.Copy(srcCsmFilePath, dstCsmFilePath, true);
+            File.WriteAllText(dstCsmFilePath, JsonConvert.SerializeObject(dstCsm, Formatting.Indented));
             if(File.Exists(abn))
                 File.Delete(abn);
         }
